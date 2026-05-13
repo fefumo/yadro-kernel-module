@@ -1,2 +1,169 @@
-# yadro-kernel-module
-Test assignment for Yadro TRAID team
+# dm-race
+
+`dm-race` — out-of-tree модуль ядра Linux на базе device-mapper. Модуль регистрирует target `mytarget`, через который можно создавать виртуальные блочные устройства поверх реального backend-устройства.
+
+Target проксирует BIO-запросы на нижележащее устройство и отслеживает активные диапазоны секторов до момента их завершения. Если новый запрос нарушает контракт упорядочивания для уже активного диапазона, модуль пишет предупреждение в kernel log.
+
+## Проверяемый контракт
+
+Модуль сообщает о нарушениях:
+
+  1. Если запись сектора или диапазона секторов ещё не завершена, никакая другая операция на пересекающийся диапазон не должна уходить на устройство.
+  2. Если чтение сектора или диапазона секторов ещё не завершено, запись на пересекающийся диапазон не должна уходить на устройство.
+
+- Чтение с чтением не считается гонкой.
+
+## Сборка
+
+Скомпилировано и проверено на Arch Linux.
+
+Требования:
+
+- Linux headers для текущего ядра
+- `gcc`
+- `make`
+- `dmsetup`
+- опционально `compiledb` для генерации `compile_commands.json`
+
+> Если используется нестандартное ядро, нужен соответствующий пакет headers для этого ядра.
+
+Сборка:
+
+```bash
+make
+````
+
+Загрузка модуля:
+
+```bash
+sudo insmod dm-race.ko
+```
+
+Выгрузка:
+
+```bash
+sudo rmmod dm_race
+```
+
+Очистка:
+
+```bash
+make clean
+```
+
+## Поддержка nvim / clangd
+
+Для генерации `compile_commands.json`:
+
+```bash
+make compile_commands
+```
+
+После этого `clangd` в nvim должен видеть include-пути Kbuild и нормально парсить проект.
+
+## Использование
+
+Создайте backend-устройство. Для тестов можно использовать loop device:
+
+```bash
+dd if=/dev/zero of=/tmp/dm-race-backend.img bs=1M count=1024
+sudo losetup --find --show /tmp/dm-race-backend.img
+```
+
+Допустим, команда вернула `/dev/loop0`.
+
+Создайте device-mapper устройство:
+
+```bash
+SIZE=2097152
+DEV=/dev/loop0
+
+sudo dmsetup create my0 --table "0 $SIZE mytarget $DEV"
+```
+
+Теперь устройство доступно как:
+
+```bash
+/dev/mapper/my0
+```
+
+Пример нагрузки:
+
+```bash
+sudo dd oflag=direct if=/dev/urandom of=/dev/mapper/my0 bs=32k count=1 seek=4 &
+sudo dd oflag=direct if=/dev/urandom of=/dev/mapper/my0 bs=8k count=1 seek=17
+```
+
+Первый запрос пишет 32 KiB со смещением `4 * 32 KiB = 128 KiB`, то есть примерно в секторный диапазон `[256..319]`.
+
+Второй запрос пишет 8 KiB со смещением `17 * 8 KiB = 136 KiB`, то есть примерно в секторный диапазон `[272..287]`.
+
+Эти диапазоны пересекаются. Если первый запрос ещё не завершён к моменту отправки второго, модуль напишет предупреждение.
+
+Просмотр сообщений:
+
+```bash
+sudo dmesg | grep dm-race
+```
+
+Статус target:
+
+```bash
+sudo dmsetup status my0
+```
+
+Пример вывода:
+
+```text
+0 2097152 mytarget backend=/dev/loop0 offset=0 active=0 races=1
+```
+
+Удаление устройства:
+
+```bash
+sudo dmsetup remove my0
+```
+
+## Быстрый тест
+
+```bash
+make
+chmod +x smoke.sh
+./smoke.sh
+```
+
+Тест создаёт loop device, поднимает `dmsetup`-устройство, запускает пересекающиеся операции и показывает статус target вместе с сообщениями из `dmesg`.
+
+Пример результата выполнения:
+
+```bash
+0 2097152 mytarget backend=/dev/loop0 offset=0 active=0 races=4
+[ 9097.494658] dm-race: race on /dev/loop0: new write [272..287] conflicts with in-flight write [256..319]
+[ 9098.661469] dm-race: race on /dev/loop0: new write [256..319] conflicts with in-flight read [256..263]
+[ 9098.730601] dm-race: race on /dev/loop0: new write [272..287] conflicts with in-flight write [256..319]
+[ 9098.774780] dm-race: race on /dev/loop0: new write [272..287] conflicts with in-flight write [272..287]
+```
+
+`active=0` означает, что к моменту вывода статуса все BIO-запросы уже завершились и были удалены из tracker'а.
+
+`races=4` означает, что за время теста модуль обнаружил 4 нарушения контракта.
+
+## Таблица target
+
+Основной формат:
+
+```bash
+sudo dmsetup create my0 --table "0 <SIZE> mytarget <BACKEND_DEV>"
+```
+
+Также поддерживается offset на backend-устройстве:
+
+```bash
+sudo dmsetup create my0 --table "0 <SIZE> mytarget <BACKEND_DEV> <BACKEND_OFFSET_SECTORS>"
+```
+
+Все размеры и offset задаются в 512-байтных секторах.
+
+## Практическая ремарка
+
+На очень быстрых backend-устройствах гонка может не обнаруживаться при каждом запуске, потому что первый BIO иногда успевает завершиться до отправки второго. Для более стабильного тестирования `smoke.sh` запускает несколько пересекающихся операций, чтобы увеличить вероятность одновременных in-flight запросов.

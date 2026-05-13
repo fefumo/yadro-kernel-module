@@ -1,0 +1,31 @@
+CompileFlags:
+  Add:
+    - -Iinclude
+    - -I.kernel/include
+    - -I.kernel/include/uapi
+    - -I.kernel/include/generated
+    - -I.kernel/include/generated/uapi
+    - -I.kernel/arch/x86/include
+    - -I.kernel/arch/x86/include/uapi
+    - -I.kernel/arch/x86/include/generated
+    - -I.kernel/arch/x86/include/generated/uapi
+    - -include
+    - .kernel/include/linux/kconfig.h
+    - -D__KERNEL__
+    - -DMODULE
+    - -DKBUILD_MODNAME="dm_race"
+    - -DKBUILD_BASENAME="dm_race"
+    - -std=gnu11
+  Remove:
+    - -fconserve-stack
+    - -fno-allow-store-data-races
+    - -fmin-function-alignment=*
+    - -fzero-init-padding-bits=*
+    - -mrecord-mcount
+    - -mindirect-branch*
+    - -mfunction-return*
+    - -mpreferred-stack-boundary=*
+    - -mno-sse
+    - -mno-mmx
+    - -mno-sse2
+    - -mno-80387
