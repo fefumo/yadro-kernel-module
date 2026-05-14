@@ -24,7 +24,7 @@ load: all
 	sudo insmod dm-race.ko
 
 unload:
-	-sudo rmmod dm_race
+	sudo rmmod dm_race
 
 reload: unload load
 
